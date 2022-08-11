@@ -85,7 +85,8 @@ impl PlaneSystem {
    }
    
    fn dv_dt(&self) -> f64 {
-      self.p.calc(vp(self.t-self.x[4])).1
+      self.p.calc(vp(self.t-self.x[4])).1+
+      self.p2*self.p.calc(vp(self.t+self.x[0]-self.x[4])).1
    }
 
    fn dp(&self, idx1 : usize, idx2 : usize, dx : f64) -> f64 {
