@@ -3,6 +3,7 @@ use rand::Rng;
 use rand::distributions::{Distribution, Uniform};
 use std::io;
 use std::fmt;
+use std::ops::{Index,IndexMut};
 
 fn read_number<T : std::str::FromStr >() -> T {
     let mut input = String::new();
@@ -19,12 +20,61 @@ fn read_number<T : std::str::FromStr >() -> T {
 }
 
 
-
+#[derive(Copy,Clone)]
 enum McMove {
     SingleShift{dx: f64, idx : usize},
     PairShift{dx: f64, idx : usize},
     TripletShift{dx : f64, idx : usize},
     PairExchange{idx: usize}
+}
+
+struct McMoveCounter {
+    count : [usize;4]
+}
+
+impl McMoveCounter {
+    fn new() -> McMoveCounter {
+        McMoveCounter{count: [0,0,0,0]}
+    }
+}
+
+impl IndexMut<McMove> for McMoveCounter {
+
+    fn index_mut(&mut self, index : McMove ) -> &mut Self::Output {
+        match index {
+            McMove::SingleShift{dx,idx} => &mut self.count[0],
+            McMove::PairShift{dx,idx} => &mut self.count[1],
+            McMove::TripletShift{dx,idx} => &mut self.count[2],
+            McMove::PairExchange{idx} => &mut self.count[3],
+        }
+    }
+}
+impl Index<McMove> for McMoveCounter {
+    type Output = usize;
+
+    fn index(&self, index : McMove ) -> &Self::Output {
+        match index {
+            McMove::SingleShift{dx,idx} => &self.count[0],
+            McMove::PairShift{dx,idx} => &self.count[1],
+            McMove::TripletShift{dx,idx} => &self.count[2],
+            McMove::PairExchange{idx} => &self.count[3],
+        }
+    }
+}
+
+
+impl fmt::Display for McMoveCounter {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for element in self.count {
+            let res=write!(f,"{} ",element);
+            match res {
+                Ok(()) => (),
+                Error => return Error
+
+            }
+        };
+        Ok(())
+    }
 }
 
 impl fmt::Display for McMove {
@@ -130,11 +180,15 @@ impl PlaneSystem {
        if idx%6 == 0 {0.0} else {self.x[idx%6-1]}
    }
 
+   fn coord_conversion(idx_from : usize, idx_to : usize) -> f64 {
+       //note: +3 or -3 is the same, since the difference is 6
+       if idx_from%2 == idx_to%2 {0.0} else {3.0}
+   }
 
    fn delta_x_switched(&self, idx1 : usize, idx1_position : usize, idx2 : usize, idx2_position : usize) -> f64 {
        //this uses positions from other planes, as it they were exchanged
-       let x2 = self.x_plane(idx2_position);
-       let x1 = self.x_plane(idx1_position);
+       let x2 = self.x_plane(idx2_position)+Self::coord_conversion(idx2_position,idx2);
+       let x1 = self.x_plane(idx1_position)+Self::coord_conversion(idx1_position,idx1);
        x2-x1+self.delta_pbc(idx1,idx2)
    }
    
@@ -249,7 +303,7 @@ impl PlaneSystem {
            Some(McMove::PairExchange{idx}) => 
                 match idx {
                     0..=3 => {
-                        (self.x[idx], self.x[idx+1]) = (self.x[idx+1],self.x[idx]);
+                        (self.x[idx], self.x[idx+1]) = (self.x[idx+1]+Self::coord_conversion(idx+1,idx),self.x[idx]+Self::coord_conversion(idx,idx+1));
                         m
                     },
                     _ => None
@@ -261,24 +315,26 @@ impl PlaneSystem {
 
 fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64) -> Option<McMove> {
     let moveChoice = Uniform::from(0..4);
-    let planeChoice = Uniform::from(0..5);
+    let planeChoice5 = Uniform::from(0..5);
+    let planeChoice4 = Uniform::from(0..4);
+    let planeChoice3 = Uniform::from(0..3);
     let dxChoice = Uniform::from(-dxmax..dxmax);
     let idx = moveChoice.sample(rng);
     let add = (rng.gen_range(0..=2) as f64)*2.0*(rng.gen_range(0..=1)*2-1) as f64;
     match idx {
         0 => Some(McMove::SingleShift{
                 dx : dxChoice.sample(rng)+add,
-                idx : planeChoice.sample(rng)
+                idx : planeChoice5.sample(rng)
              }),
         1 => Some(McMove::PairShift{
                 dx : dxChoice.sample(rng)+add,
-                idx : planeChoice.sample(rng)%4
+                idx : planeChoice4.sample(rng)
              }),
-        2 => Some(McMove::PairShift{
+        2 => Some(McMove::TripletShift{
                 dx : dxChoice.sample(rng)+add,
-                idx : planeChoice.sample(rng)%3
+                idx : planeChoice3.sample(rng)
              }),
-        3 => Some(McMove::PairExchange{ idx : planeChoice.sample(rng)%4}),
+        3 => Some(McMove::PairExchange{ idx : planeChoice4.sample(rng)}),
         _ => None
     }
 }
@@ -316,12 +372,13 @@ impl OnlineAverage {
 
 fn main() {
 
-    println!("#Please input h0, h1, second_neigh factor, tilt, beta and number of trials of the inner loop and the outer loop");
+    println!("#Please input h0, h1, second_neigh factor, tilt, beta, dx_max and number of trials of the inner loop and the outer loop");
     let h0 = read_number::<f64>();
     let h1 = read_number::<f64>();
     let p2 = read_number::<f64>();
     let t = read_number::<f64>(); 
     let beta = read_number::<f64>(); 
+    let dx_max = read_number::<f64>(); 
     let nsteps = read_number::<u64>();
     let nsteps_out = read_number::<u64>();
 
@@ -337,22 +394,23 @@ fn main() {
     let mut te_mean = OnlineAverage::new();
 
 
-
+    let mut moveCounter_acc = McMoveCounter::new();
+    let mut moveCounter_rej = McMoveCounter::new();
     for jstep in 0..nsteps_out { 
        let mut accepted = 0;
        let mut rejected = 0;
        for istep in 0..nsteps {
-          let m = generate_random_move(&mut rng, 0.1);
+          let m = generate_random_move(&mut rng, dx_max);
           let de_ = system.move_dv_new(&m);
           match de_ {
              Some(de) => {
                        te_mean.update(de);
                        let p = (-system.beta*de).exp();
                        let v_old = system.v().0;
-                       let zero_c=1e-12;
                        let check_de = |v_new : f64, m_ : McMove | {
+                          let zero_c=1e-11;
                           let diff = (de-(v_new-v_old)).abs();
-                          println!("{}",m_);
+                          println!("move {} (de={})",m_,de);
                           if diff > zero_c {println!("{} {}",istep,diff); }
                           assert!(diff < zero_c);
                        };
@@ -360,6 +418,7 @@ fn main() {
                           let m = system.apply_move(m);
                           match m { None => {rejected +=1;}, Some(m_) => {
                               accepted+=1;
+                              moveCounter_acc[m_] += 1;
                               //check_de(system.v().0,m_);
                           }}
                        } else {
@@ -368,9 +427,24 @@ fn main() {
                               let m = system.apply_move(m);
                               match m { None => {rejected +=1;}, Some(m_) => {
                                   accepted+=1;
+                                  moveCounter_acc[m_] += 1;
                                   //check_de(system.v().0,m_);
                               }}
-                          } else {rejected += 1;}
+                          } else {
+                              match m {
+                                  None => (),
+                                  Some(m_) => {
+                                     moveCounter_rej[m_] += 1;
+                                     //println!("move {} rejected (de={})",m_,de);
+                                     //let old_x = system.x.clone();
+                                     //let m__ = system.apply_move(Some(m_));
+                                     //check_de(system.v().0,m_);
+                                     //system.x = old_x;
+
+                                  }
+                              }
+                              rejected += 1;
+                          }
                        }
                   },
              None => ()
@@ -393,5 +467,6 @@ fn main() {
     println!("#!v {} {} {}",v_mean.get_mean_variance_count().0, v_mean.get_mean_variance_count().1, v_mean.get_mean_variance_count().2);
     println!("#!dv_dt {} {} {}",de_mean.get_mean_variance_count().0, de_mean.get_mean_variance_count().1, de_mean.get_mean_variance_count().2);
     println!("#!accr {} {} {}",acc_mean.get_mean_variance_count().0, acc_mean.get_mean_variance_count().1, acc_mean.get_mean_variance_count().2);
+    println!("#!accrMove {} {}",moveCounter_acc,moveCounter_rej);
 
 }
