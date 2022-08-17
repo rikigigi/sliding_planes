@@ -2,6 +2,7 @@ use superpoly::poly::Poly;
 use rand::Rng;
 use rand::distributions::{Distribution, Uniform};
 use std::io;
+use std::fmt;
 
 fn read_number<T : std::str::FromStr >() -> T {
     let mut input = String::new();
@@ -23,6 +24,18 @@ enum McMove {
     SingleShift{dx: f64, idx : usize},
     PairShift{dx: f64, idx : usize},
     TripletShift{dx : f64, idx : usize},
+    PairExchange{idx: usize}
+}
+
+impl fmt::Display for McMove {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+       match *self {
+          McMove::SingleShift{dx,idx} => write!(f,"Single shift of plane {idx} of {dx}"),
+          McMove::PairShift{dx,idx} => write!(f,"Pair shift of planes starting at {idx} of {dx}"),
+          McMove::TripletShift{dx,idx} => write!(f,"Triple shift of planes starting at {idx} of {dx}"),
+          McMove::PairExchange{idx} => write!(f,"Single swap of planes starting at {idx}")
+       }
+    }
 }
 
 struct PlaneSystem {
@@ -90,7 +103,43 @@ impl PlaneSystem {
    
    fn dv_dt(&self) -> f64 {
       self.p.calc(vp(self.t-self.x[4])).1+
-      self.p2*self.p.calc(vp(self.t+self.x[0]-self.x[4])).1
+      self.p2*self.p.calc(vp(self.t+self.x[0]-self.x[4]+3.0)).1
+   }
+
+   fn p0(&self,x : f64) -> f64 {
+       self.p.calc(vp(x)).0
+   }
+
+   fn delta_pbc(&self, idx1 : usize, idx2 : usize) -> f64 {
+       //idx1 is the index of the plane in the real system, starting from 0 (that is the fixed plane)
+       //idx2 is the index of the plane that is found going up. If it is less than idx1, the code
+       //will go back throw the pbc, thus adding each time the tilt
+       //return the difference due to pbc only
+       let x1 = self.t*(idx1/6) as f64;
+       let mut x2 = self.t*(idx2/6) as f64;
+       let mut idx2_ = idx2;
+       while idx2_ < idx1 {
+           idx2_ += 6;
+           x2 += self.t;
+       }
+
+       x2-x1
+   }
+
+   fn x_plane(&self, idx : usize) -> f64 {
+       if idx%6 == 0 {0.0} else {self.x[idx%6-1]}
+   }
+
+
+   fn delta_x_switched(&self, idx1 : usize, idx1_position : usize, idx2 : usize, idx2_position : usize) -> f64 {
+       //this uses positions from other planes, as it they were exchanged
+       let x2 = self.x_plane(idx2_position);
+       let x1 = self.x_plane(idx1_position);
+       x2-x1+self.delta_pbc(idx1,idx2)
+   }
+   
+   fn delta_x(&self, idx1 : usize, idx2 : usize) -> f64 {
+       self.delta_x_switched(idx1,idx1,idx2,idx2)
    }
 
    fn dp2(&self, idx1 : usize, idx2 : usize, dx : f64) -> f64 {
@@ -99,16 +148,8 @@ impl PlaneSystem {
        //will go back throw the pbc, thus adding each time the tilt
        //it does something similar to p(x2-x1+dx+3.0)-p(x2-x1+3.0) , with pbc
        //put dx with the opposite sign if you want to translate plane idx1!
-       let mut x2 = if idx2%6 == 0 {0.0} else {self.x[idx2%6-1]} + self.t*(idx2/6) as f64;
-       let x1 = if idx1%6 == 0 {0.0} else {self.x[idx1%6-1]} + self.t*(idx1/6) as f64;
-
-       //move idx2_ after idx1
-       let mut idx2_ = idx2;
-       while idx2_ < idx1 {
-           idx2_ += 6;
-           x2 += self.t;
-       }
-       self.p.calc(vp(x2-x1+dx+3.0)).0-self.p.calc(vp(x2-x1+3.0)).0
+       let x2mx1 =self.delta_x(idx1,idx2);
+       self.p0(x2mx1+dx+3.0)-self.p0(x2mx1+3.0)
    }
    fn dp(&self, idx1 : usize, idx2 : usize, dx : f64) -> f64 {
        //idx1 is the index of the plane in the real system, starting from 0 (that is the fixed plane)
@@ -116,17 +157,10 @@ impl PlaneSystem {
        //will go back throw the pbc, thus adding each time the tilt
        //it does something similar to p(x2-x1+dx)-p(x2-x1) , with pbc
        //put dx with the opposite sign if you want to translate plane idx1!
-       let mut x2 = if idx2%6 == 0 {0.0} else {self.x[idx2%6-1]} + self.t*(idx2/6) as f64;
-       let x1 = if idx1%6 == 0 {0.0} else {self.x[idx1%6-1]} + self.t*(idx1/6) as f64;
-
-       //move idx2_ after idx1
-       let mut idx2_ = idx2;
-       while idx2_ < idx1 {
-           idx2_ += 6;
-           x2 += self.t;
-       }
-       self.p.calc(vp(x2-x1+dx)).0-self.p.calc(vp(x2-x1)).0
+       let x2mx1 =self.delta_x(idx1,idx2);
+       self.p0(x2mx1+dx)-self.p0(x2mx1)
    }
+
 
    fn move_dv_new(&self, m : &Option<McMove>) -> Option<f64> {
        match m {
@@ -160,6 +194,27 @@ impl PlaneSystem {
                     )
                   )
            },
+           Some(McMove::PairExchange{idx}) => {
+              let idx = *idx;
+              let idx6 = idx+6;
+              let off2 = 3.0;
+              Some({
+                    //energy before the switch
+                    let old_upper_plane = self.p0(self.delta_x(idx+2,idx+3))+self.p2*(self.p0(self.delta_x(idx+2,idx+4)+3.0)+
+                                          self.p0(self.delta_x(idx,idx+2)+3.0));
+                    let old_lower_plane = self.p0(self.delta_x(idx,idx+1))+self.p2*(self.p0(self.delta_x(idx+1,idx+3)+3.0)+
+                                          self.p0(self.delta_x(idx6-1,idx6+1)+3.0));
+                    //energy after the switch
+                    let new_upper_plane = self.p0(self.delta_x_switched(idx+2,idx+1,idx+3,idx+3)) + self.p2*(self.p0(self.delta_x_switched(idx+2,idx+1,idx+4,idx+4)+3.0)+
+                                          self.p0(self.delta_x_switched(idx,idx,idx+2,idx+1)+3.0));
+                    let new_lower_plane = self.p0(self.delta_x_switched(idx,idx,idx+1,idx+2))+self.p2*(self.p0(self.delta_x_switched(idx+1,idx+2,idx+3,idx+3)+3.0)+
+                                          self.p0(self.delta_x_switched(idx6-1,idx6-1,idx6+1,idx6+2)+3.0));
+                    new_upper_plane+new_lower_plane-old_upper_plane-old_lower_plane
+                    
+                   }
+
+                  )
+           },
            None => None
        }
    }
@@ -191,13 +246,21 @@ impl PlaneSystem {
                         },
                     _ => None
                },
+           Some(McMove::PairExchange{idx}) => 
+                match idx {
+                    0..=3 => {
+                        (self.x[idx], self.x[idx+1]) = (self.x[idx+1],self.x[idx]);
+                        m
+                    },
+                    _ => None
+                }
            None => None
       }
    }
 }
 
 fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64) -> Option<McMove> {
-    let moveChoice = Uniform::from(0..3);
+    let moveChoice = Uniform::from(0..4);
     let planeChoice = Uniform::from(0..5);
     let dxChoice = Uniform::from(-dxmax..dxmax);
     let idx = moveChoice.sample(rng);
@@ -215,6 +278,7 @@ fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64) -> Option
                 dx : dxChoice.sample(rng)+add,
                 idx : planeChoice.sample(rng)%3
              }),
+        3 => Some(McMove::PairExchange{ idx : planeChoice.sample(rng)%4}),
         _ => None
     }
 }
@@ -286,24 +350,25 @@ fn main() {
                        let p = (-system.beta*de).exp();
                        let v_old = system.v().0;
                        let zero_c=1e-12;
-                       let check_de = |v_new : f64| {
+                       let check_de = |v_new : f64, m_ : McMove | {
                           let diff = (de-(v_new-v_old)).abs();
-                          if diff > zero_c {println!("{} {}",istep,diff);}
+                          println!("{}",m_);
+                          if diff > zero_c {println!("{} {}",istep,diff); }
                           assert!(diff < zero_c);
                        };
                        if p >= 1.0 {
                           let m = system.apply_move(m);
-                          match m { None => {rejected +=1;}, McMove => {
+                          match m { None => {rejected +=1;}, Some(m_) => {
                               accepted+=1;
-                              //check_de(system.v().0);
+                              //check_de(system.v().0,m_);
                           }}
                        } else {
                           let r = rnd_01.sample(&mut rng);
                           if r < p {
                               let m = system.apply_move(m);
-                              match m { None => {rejected +=1;}, McMove => {
+                              match m { None => {rejected +=1;}, Some(m_) => {
                                   accepted+=1;
-                                  //check_de(system.v().0);
+                                  //check_de(system.v().0,m_);
                               }}
                           } else {rejected += 1;}
                        }
