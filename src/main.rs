@@ -105,12 +105,19 @@ impl PlaneSystem {
 
    fn new(p: Poly, t: f64, beta:f64, p2 : f64) -> PlaneSystem {
        PlaneSystem {
-          x: [0.0,0.0,0.0,0.0,0.0],
+          x: [-1.0,-2.0,-3.0,-4.0,-5.0], // fcc configuration
           t,
           p,
           beta,
           p2
        }
+   }
+
+   fn t_fcc_hcp(&mut self,t: f64) {
+       self.x[1] += 2.0*t/6.0;
+       self.x[2] += 2.0*t/6.0;
+       self.x[3] += 4.0*t/6.0;
+       self.x[4] += 4.0*t/6.0;
    }
 
    fn abc(&self) -> [f64;5] {
@@ -314,7 +321,7 @@ impl PlaneSystem {
 }
 
 fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64) -> Option<McMove> {
-    let moveChoice = Uniform::from(0..4);
+    let moveChoice = Uniform::from(0..3); //not using last move...
     let planeChoice5 = Uniform::from(0..5);
     let planeChoice4 = Uniform::from(0..4);
     let planeChoice3 = Uniform::from(0..3);
@@ -385,6 +392,10 @@ fn main() {
     let p = Poly::new(vec![3.0,4.55,4.3,5.02,7.1],vec![0.0,0.0,0.0,9.0,90.0], h0, h1);
 
     let mut system = PlaneSystem::new(p,t, beta,p2);
+    if p2<0.0 {
+        system.t_fcc_hcp(6.0);
+    }
+    system.t_fcc_hcp(t);
     let mut rng = rand::thread_rng();
     let rnd_01 = Uniform::from(0.0..1.0);
 
