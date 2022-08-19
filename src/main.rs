@@ -2,8 +2,12 @@ use superpoly::poly::Poly;
 use rand::Rng;
 use rand::distributions::{Distribution, Uniform};
 use std::io;
+use std::io::Read;
 use std::fmt;
 use std::ops::{Index,IndexMut};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Result;
 
 fn read_number<T : std::str::FromStr >() -> T {
     let mut input = String::new();
@@ -87,6 +91,7 @@ impl fmt::Display for McMove {
        }
     }
 }
+
 
 struct PlaneSystem {
     x : [f64;5] ,
@@ -320,8 +325,8 @@ impl PlaneSystem {
    }
 }
 
-fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64) -> Option<McMove> {
-    let moveChoice = Uniform::from(0..3); //not using last move...
+fn generate_random_move(rng : &mut rand::rngs::ThreadRng, dxmax : f64, nmax : u64) -> Option<McMove> {
+    let moveChoice = Uniform::from(0..nmax);
     let planeChoice5 = Uniform::from(0..5);
     let planeChoice4 = Uniform::from(0..4);
     let planeChoice3 = Uniform::from(0..3);
@@ -377,25 +382,46 @@ impl OnlineAverage {
 
 }
 
+
+#[derive(Serialize, Deserialize)]
+struct InputData {
+   h0: f64,
+   h1: f64,
+   second_neigh_coeff: f64,
+   tilt: f64,
+   beta: f64,
+   max_dx: f64,
+   steps_new_config: u64,
+   n_configs: u64,
+   used_moves: u64,
+   start_from_hcp: bool
+}
+
+
 fn main() {
 
-    println!("#Please input h0, h1, second_neigh factor, tilt, beta, dx_max and number of trials of the inner loop and the outer loop");
-    let h0 = read_number::<f64>();
-    let h1 = read_number::<f64>();
-    let p2 = read_number::<f64>();
-    let t = read_number::<f64>(); 
-    let beta = read_number::<f64>(); 
-    let dx_max = read_number::<f64>(); 
-    let nsteps = read_number::<u64>();
-    let nsteps_out = read_number::<u64>();
+
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input).expect("Reading of the stdin failed");
+    let input : InputData = serde_json::from_str(&input).unwrap();
+
+    let h0 = input.h0;
+    let h1 = input.h1;
+    let p2 = input.second_neigh_coeff;
+    let t = input.tilt; 
+    let beta = input.beta; 
+    let dx_max = input.max_dx; 
+    let nsteps = input.steps_new_config;
+    let nsteps_out = input.n_configs;
 
     let p = Poly::new(vec![3.0,4.55,4.3,5.02,7.1],vec![0.0,0.0,0.0,9.0,90.0], h0, h1);
 
     let mut system = PlaneSystem::new(p,t, beta,p2);
-    if p2<0.0 {
-        system.t_fcc_hcp(6.0);
+    if input.start_from_hcp {
+        system.t_fcc_hcp(6.0-t); //go to HCP, then back so t=6 is FCC
+    } else {
+        system.t_fcc_hcp(t);//we are FCC, here t=6 is HCP
     }
-    system.t_fcc_hcp(t);
     let mut rng = rand::thread_rng();
     let rnd_01 = Uniform::from(0.0..1.0);
 
@@ -411,7 +437,7 @@ fn main() {
        let mut accepted = 0;
        let mut rejected = 0;
        for istep in 0..nsteps {
-          let m = generate_random_move(&mut rng, dx_max);
+          let m = generate_random_move(&mut rng, dx_max,input.used_moves);
           let de_ = system.move_dv_new(&m);
           match de_ {
              Some(de) => {

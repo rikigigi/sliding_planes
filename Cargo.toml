@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 superpoly = { git = "https://github.com/rikigigi/superpoly" }
+serde_json = "*"
+serde = { version = "*", features = ["derive"] }
 rand = "*"
